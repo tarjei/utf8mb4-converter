@@ -39,7 +39,7 @@ Before proceeding:
 This app requires [Node.js][].
 
 ```
-$ npm install -g utf8mb4-converter
+$ npm install -g https://github.com/building5/utf8mb4-converter.git
 ```
 
 ## Usage
