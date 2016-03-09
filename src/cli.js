@@ -125,7 +125,7 @@ async function go() {
     .columns('schema_name'));
   databases = _.map(databases, 'schema_name');
 
-  debug('Altering databases', JSON.stringify(databases));
+  debug(`Altering ${databases.length} databases`);
   for (const db of databases) {
     await alter(`
       ALTER DATABASE \`${db}\`
@@ -146,7 +146,7 @@ async function go() {
       .where('CCSA.character_set_name', 'in', CharsetsToConvert)
       .where('T.table_type', 'BASE TABLE')
       .columns('T.table_schema', 'T.table_name'));
-  debug('Altering tables', JSON.stringify(tables));
+  debug(`Altering ${tables.length} tables`);
   for (const table of tables) {
     await alter(`
       ALTER TABLE \`${table.table_schema}\`.\`${table.table_name}\`
@@ -154,8 +154,10 @@ async function go() {
         COLLATE utf8mb4_unicode_ci`);
   }
 
+  // base query for finding the columns we want to convert
   let columnQuery = knex('information_schema.COLUMNS as C')
-    .where('C.table_schema', 'not in', databasesToSkip);
+    .where('C.table_schema', 'not in', databasesToSkip)
+    .where('C.character_set_name', 'in', CharsetsToConvert);
   for (const tableToSkip of tablesToSkip) {
     columnQuery = columnQuery.whereNot(function skipTables() {
       this.where({ 'C.table_schema': tableToSkip.database, 'C.table_name': tableToSkip.table });
@@ -178,7 +180,6 @@ async function go() {
         'C.table_name': 'S.table_name',
         'C.column_name': 'S.column_name',
       })
-      .where('C.character_set_name', 'in', CharsetsToConvert)
       .where(function complicated() {
         this
           .whereNull('S.sub_part').where('C.character_maximum_length', '>', 191)
@@ -195,14 +196,13 @@ async function go() {
     console.error('Go write some migrations to fix that');
     process.exit(1);
   }
-  debug('No problem columns');
+  debug('No problem columns detected');
 
   const columns = await select(
     columnQuery.clone()
-      .where('C.character_set_name', 'in', CharsetsToConvert)
       .columns(
         'C.table_schema', 'C.table_name', 'C.column_name', 'C.column_type', 'C.is_nullable'));
-  debug('Altering columns', JSON.stringify(columns, null, 2));
+  debug(`Altering ${columns.length} columns`);
   for (const c of columns) {
     await alter(`
       ALTER TABLE \`${c.table_schema}\`.\`${c.table_name}\`
