@@ -15,14 +15,37 @@ const databasesToSkip = [
   'sys',
 ];
 
+const tablesToSkip = [];
+
+const columnsToSkip = [];
+
 const databasesToLimit = [];
+
+function skip(spec) {
+  const split = spec.split(/\./);
+  if (split.length < 1 || split.length > 3) {
+    console.error(`${name}: Invalid --skip ${spec}`);
+    process.exit(1);
+  }
+
+  const [database, table, column] = split;
+
+  if (column) {
+    columnsToSkip.push({ database, table, column });
+  } else if (table) {
+    tablesToSkip.push({ database, table });
+  } else {
+    databasesToSkip.push(database);
+  }
+}
 
 program.version(version)
   .option('-h --host [host]', 'MySQL server to connect to [localhost]', 'localhost')
   .option('-u --user [user]', 'User to connect with [root]', 'root')
   .option('-p --password [passwd]', 'Use or prompt for password')
   .option('-v --verbose', 'Log more details')
-  .option('   --skip [database]', 'Skip conversion of the database', d => databasesToSkip.push(d))
+  .option('   --skip [database[.table[.column]]]',
+    'Skip conversion of the database/table/column', skip)
   .option('   --limit [database]', 'Limit to given database', d => databasesToLimit.push(d))
   .option('   --make-it-so', 'Execute DDL in addition to printing it out')
   .option('   --force-latin1', 'Force conversions of latin1 data');
@@ -36,13 +59,14 @@ program.on('--help', () => {
 });
 program.parse(process.argv);
 
+function commentOut(arg) {
+  return arg.split(/\n/)
+    .map((line, index) => index === 0 ? line : `-- ${line}`)
+    .join('\n');
+}
+
 function debug(...args) {
   if (program.verbose) {
-    function commentOut(arg) {
-      return arg.split(/\n/)
-        .map((line, index) => index === 0 ? line : `-- ${line}`)
-        .join('\n');
-    }
     const commented = _.map(args, commentOut);
     commented.unshift('--');
     console.log.apply(null, commented);
@@ -54,6 +78,9 @@ const CharsetsToConvert = program.forceLatin1 ? ['utf8', 'latin1'] : ['utf8'];
 debug('settings', JSON.stringify(_.pick(program, ['host', 'user', 'forceLatin1', 'makeItSo'])));
 
 async function go() {
+  if (process.env.MYSQL_PWD) {
+    program.password = process.env.MYSQL_PWD;
+  }
   if (!_.isUndefined(program.password) && !_.isString(program.password)) {
     program.password = await new Promise((resolve, reject) => {
       read({
@@ -106,10 +133,16 @@ async function go() {
         COLLATE = utf8mb4_unicode_ci`);
   }
 
+  let tableQuery = knex('information_schema.COLLATION_CHARACTER_SET_APPLICABILITY as CCSA')
+    .join('information_schema.TABLES as T', 'CCSA.collation_name', 'T.table_collation')
+    .where('T.table_schema', 'not in', databasesToSkip);
+  for (const tableToSkip of tablesToSkip) {
+    tableQuery = tableQuery.whereNot(function skipTables() {
+      this.where({ 'T.table_schema': tableToSkip.database, 'T.table_name': tableToSkip.table });
+    });
+  }
   const tables = await select(
-    knex('information_schema.COLLATION_CHARACTER_SET_APPLICABILITY as CCSA')
-      .join('information_schema.TABLES as T', 'CCSA.collation_name', 'T.table_collation')
-      .where('T.table_schema', 'not in', databasesToSkip)
+    tableQuery
       .where('CCSA.character_set_name', 'in', CharsetsToConvert)
       .where('T.table_type', 'BASE TABLE')
       .columns('T.table_schema', 'T.table_name'));
@@ -117,18 +150,34 @@ async function go() {
   for (const table of tables) {
     await alter(`
       ALTER TABLE \`${table.table_schema}\`.\`${table.table_name}\`
-        CONVERT TO CHARACTER SET utf8mb4
+        DEFAULT CHARACTER SET utf8mb4
         COLLATE utf8mb4_unicode_ci`);
   }
 
+  let columnQuery = knex('information_schema.COLUMNS as C')
+    .where('C.table_schema', 'not in', databasesToSkip);
+  for (const tableToSkip of tablesToSkip) {
+    columnQuery = columnQuery.whereNot(function skipTables() {
+      this.where({ 'C.table_schema': tableToSkip.database, 'C.table_name': tableToSkip.table });
+    });
+  }
+  for (const columnToSkip of columnsToSkip) {
+    columnQuery = columnQuery.whereNot(function skipColumns() {
+      this.where({
+        'C.table_schema': columnToSkip.database,
+        'C.table_name': columnToSkip.table,
+        'C.column_name': columnToSkip.column,
+      });
+    });
+  }
+
   const problemColumns = await select(
-    knex('information_schema.COLUMNS as C')
+    columnQuery.clone()
       .join('information_schema.STATISTICS as S', {
         'C.table_schema': 'S.table_schema',
         'C.table_name': 'S.table_name',
         'C.column_name': 'S.column_name',
       })
-      .where('C.table_schema', 'not in', databasesToSkip)
       .where('C.character_set_name', 'in', CharsetsToConvert)
       .where(function complicated() {
         this
@@ -146,12 +195,13 @@ async function go() {
     console.error('Go write some migrations to fix that');
     process.exit(1);
   }
+  debug('No problem columns');
 
   const columns = await select(
-    knex('information_schema.COLUMNS')
-      .where('table_schema', 'not in', databasesToSkip)
-      .where('character_set_name', 'in', CharsetsToConvert)
-      .columns('table_schema', 'table_name', 'column_name', 'column_type', 'is_nullable'));
+    columnQuery.clone()
+      .where('C.character_set_name', 'in', CharsetsToConvert)
+      .columns(
+        'C.table_schema', 'C.table_name', 'C.column_name', 'C.column_type', 'C.is_nullable'));
   debug('Altering columns', JSON.stringify(columns, null, 2));
   for (const c of columns) {
     await alter(`
