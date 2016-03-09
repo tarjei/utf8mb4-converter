@@ -15,12 +15,15 @@ const databasesToSkip = [
   'sys',
 ];
 
+const databasesToLimit = [];
+
 program.version(version)
   .option('-h --host [host]', 'MySQL server to connect to [localhost]', 'localhost')
   .option('-u --user [user]', 'User to connect with [root]', 'root')
   .option('-p --password [passwd]', 'Use or prompt for password')
   .option('-v --verbose', 'Log more details')
   .option('   --skip [database]', 'Skip conversion of the database', d => databasesToSkip.push(d))
+  .option('   --limit [database]', 'Limit to given database', d => databasesToLimit.push(d))
   .option('   --make-it-so', 'Execute DDL in addition to printing it out')
   .option('   --force-latin1', 'Force conversions of latin1 data');
 program.on('--help', () => {
@@ -85,8 +88,12 @@ async function go() {
     return query.select();
   }
 
-  let databases = await select(knex('information_schema.SCHEMATA')
-    .where('schema_name', 'not in', databasesToSkip)
+  let dbQuery = knex('information_schema.SCHEMATA')
+      .where('schema_name', 'not in', databasesToSkip);
+  if (!_.isEmpty(databasesToLimit)) {
+    dbQuery = dbQuery.where('schema_name', 'in', databasesToLimit);
+  }
+  let databases = await select(dbQuery
     .where('default_character_set_name', 'in', CharsetsToConvert)
     .columns('schema_name'));
   databases = _.map(databases, 'schema_name');
@@ -144,14 +151,15 @@ async function go() {
     knex('information_schema.COLUMNS')
       .where('table_schema', 'not in', databasesToSkip)
       .where('character_set_name', 'in', CharsetsToConvert)
-      .columns('table_schema', 'table_name', 'column_name', 'column_type'));
+      .columns('table_schema', 'table_name', 'column_name', 'column_type', 'is_nullable'));
   debug('Altering columns', JSON.stringify(columns, null, 2));
   for (const c of columns) {
     await alter(`
       ALTER TABLE \`${c.table_schema}\`.\`${c.table_name}\`
-        CHANGE \`${c.column_name}\`
-        \`${c.column_name}\` ${c.column_type}
-        CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+        MODIFY \`${c.column_name}\` ${c.column_type}
+        CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+          ${c.is_nullable === 'NO' ? ' NOT NULL' : ''}
+          `);
   }
 }
 
