@@ -103,16 +103,31 @@ async function go() {
     },
   });
 
+  function time(p) {
+    const start = process.hrtime();
+    const end = () => {
+      const diff = process.hrtime(start);
+      debug(`${diff[0] * 1000 + diff[1] / 1000000} ms`);
+    };
+    return p.then(v => {
+      end();
+      return v;
+    }, err => {
+      end();
+      return Promise.reject(err);
+    });
+  }
+
   function alter(ddl) {
     console.log(`${ddl.replace(/\s+/g, ' ').trim()}`);
     if (program.makeItSo) {
-      return knex.schema.raw(ddl);
+      return time(knex.schema.raw(ddl));
     }
   }
 
   function select(query) {
     debug(query.toString());
-    return query.select();
+    return time(query.select());
   }
 
   let dbQuery = knex('information_schema.SCHEMATA')
