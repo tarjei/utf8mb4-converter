@@ -7,7 +7,7 @@
   },
   "scripts": {
     "build": "mkdir -p lib/ && babel --out-dir lib/ src/",
-    "clean": "rm -rf lib/ build/",
+    "clean": "rm -rf src/ build/",
     "prepublish": "npm run test && npm run clean && npm run build",
     "test": "eslint ."
   },
