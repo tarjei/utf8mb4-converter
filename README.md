@@ -1,3 +1,15 @@
+# This is a fork of the original utf8mb4-converter!
+
+It's main difference is that it does not rely on babel for compilation and building.
+
+The easiest way to use it (with a modern version of node) is to check out out this repo and run
+
+    npm install
+    node src/cli.js 
+
+And then add the commandline options you need.
+
+
 # utf8mb4-converter
 
 So, you thought ahead when setting up your [MySQL][] database and set your
